@@ -83,7 +83,7 @@ void BufferManager::startBackgroundThreads()
                 if (FLAGS_pin_threads) {
                    utils::pinThisThread(FLAGS_worker_threads + FLAGS_wal + t_i);
                 } else {
-                   utils::pinThisThread(FLAGS_wal + t_i);
+                   //utils::pinThisThread(FLAGS_wal + t_i);
                 }
                 CPUCounters::registerThread("pp_" + std::to_string(t_i));
                 // https://linux.die.net/man/2/setpriority
@@ -432,11 +432,21 @@ void BufferManager::readPageSync(u64 pid, u8* destination)
 {
    paranoid(u64(destination) % 512 == 0);
    s64 bytes_left = PAGE_SIZE;
+   auto start = std::chrono::high_resolution_clock::now();
    do {
       const int bytes_read = pread(ssd_fd, destination, bytes_left, pid * PAGE_SIZE + (PAGE_SIZE - bytes_left));
       assert(bytes_read > 0);  // call was successfull?
       bytes_left -= bytes_read;
    } while (bytes_left > 0);
+   COUNTERS_BLOCK()
+   {
+      auto end = std::chrono::high_resolution_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+      if (WorkerCounters::myCounters().ioReadHistLock.try_lock()) {
+         WorkerCounters::myCounters().ioReadHist.increaseSlot(elapsed);
+         WorkerCounters::myCounters().ioReadHistLock.unlock();
+      }
+   }
    // -------------------------------------------------------------------------------------
    COUNTERS_BLOCK() { WorkerCounters::myCounters().read_operations_counter++; }
 }

@@ -1,4 +1,5 @@
 #include "../shared/LeanStoreAdapter.hpp"
+#include "Exceptions.hpp"
 #include "Schema.hpp"
 #include "TPCCWorkload.hpp"
 // -------------------------------------------------------------------------------------
@@ -16,6 +17,7 @@
 // -------------------------------------------------------------------------------------
 #include <unistd.h>
 
+#include <chrono>
 #include <iostream>
 #include <set>
 #include <string>
@@ -38,9 +40,11 @@ DEFINE_uint64(ch_a_process_delay_sec, 0, "");
 DEFINE_bool(ch_a_infinite, false, "");
 DEFINE_bool(ch_a_once, false, "");
 DEFINE_uint32(tpcc_threads, 0, "");
+DEFINE_bool(tpcc_stats, false, "");
 // -------------------------------------------------------------------------------------
 using namespace std;
 using namespace leanstore;
+// -------------------------------------------------------------------------------------
 // -------------------------------------------------------------------------------------
 int main(int argc, char** argv)
 {
@@ -64,7 +68,37 @@ int main(int argc, char** argv)
    LeanStoreAdapter<orderline_t> orderline;
    LeanStoreAdapter<item_t> item;
    LeanStoreAdapter<stock_t> stock;
+   // -------------------------------------------------------------------------------------
    auto& crm = db.getCRManager();
+   // -------------------------------------------------------------------------------------
+   auto tpccStats = [&]() {
+      auto treeStats = [&](auto& adapter, string name) {
+         u64 pages = adapter.btree->countPages();
+         u64 inner = adapter.btree->countInner();
+         u64 items = adapter.count();
+         std::stringstream ss;
+         ss << name << ": " << items << " pages: " << pages << " items/page: " << (double)items / pages << " inner: " << inner << " inner/pages: " << (float)inner/pages*100 << "%";
+         return ss.str();
+      };
+      // print for all tables
+      cout << "Gathering TPC-C stats ..." << endl;
+      std::vector<std::string> stats(11);
+      crm.scheduleJobSync(0, [&]() { stats[0] = treeStats(warehouse, "warehouse"); });
+      crm.scheduleJobSync(0, [&]() { stats[1] = treeStats(district, "district"); });
+      crm.scheduleJobSync(0, [&]() { stats[2] = treeStats(customer, "customer"); });
+      crm.scheduleJobSync(0, [&]() { stats[3] = treeStats(customerwdl, "customerwdl"); });
+      crm.scheduleJobSync(0, [&]() { stats[4] = treeStats(history, "history"); });
+      crm.scheduleJobSync(0, [&]() { stats[5] = treeStats(neworder, "neworder"); });
+      crm.scheduleJobSync(0, [&]() { stats[6] = treeStats(order, "order"); });
+      crm.scheduleJobSync(0, [&]() { stats[7] = treeStats(order_wdc, "order_wdc"); });
+      crm.scheduleJobSync(0, [&]() { stats[8] = treeStats(orderline, "orderline"); });
+      crm.scheduleJobSync(0, [&]() { stats[9] = treeStats(item, "item"); });
+      crm.scheduleJobSync(0, [&]() { stats[10] = treeStats(stock, "stock"); });
+      crm.joinAll();
+      for (const auto& stat : stats) {
+         cout << stat << endl;
+      }
+   };
    // -------------------------------------------------------------------------------------
    crm.scheduleJobSync(0, [&]() {
       warehouse = LeanStoreAdapter<warehouse_t>(db, "warehouse");
@@ -75,9 +109,9 @@ int main(int argc, char** argv)
       neworder = LeanStoreAdapter<neworder_t>(db, "neworder");
       order = LeanStoreAdapter<order_t>(db, "order");
       order_wdc = LeanStoreAdapter<order_wdc_t>(db, "order_wdc");
-      orderline = LeanStoreAdapter<orderline_t>(db, "orderline");
       item = LeanStoreAdapter<item_t>(db, "item");
       stock = LeanStoreAdapter<stock_t>(db, "stock");
+      orderline = LeanStoreAdapter<orderline_t>(db, "orderline");
    });
    // -------------------------------------------------------------------------------------
    db.registerConfigEntry("tpcc_warehouse_count", FLAGS_tpcc_warehouse_count);
@@ -97,6 +131,7 @@ int main(int argc, char** argv)
                                        FLAGS_order_wdc_index, FLAGS_tpcc_warehouse_count, FLAGS_tpcc_remove,
                                        should_tpcc_driver_handle_isolation_anomalies, FLAGS_tpcc_warehouse_affinity);
    // -------------------------------------------------------------------------------------
+   db.startProfilingThread();
    if (!FLAGS_recover) {
       cout << "Loading TPC-C" << endl;
       crm.scheduleJobSync(0, [&]() {
@@ -108,6 +143,7 @@ int main(int argc, char** argv)
       std::atomic<u32> g_w_id = 1;
       for (u32 t_i = 0; t_i < FLAGS_worker_threads; t_i++) {
          crm.scheduleJobAsync(t_i, [&]() {
+            cout << "rand seed: " << leanstore::utils::RandomGenerator::getRand(0, 1000000) << endl;
             while (true) {
                u32 w_id = g_w_id++;
                if (w_id > FLAGS_tpcc_warehouse_count) {
@@ -153,13 +189,15 @@ int main(int argc, char** argv)
    // -------------------------------------------------------------------------------------
    double gib = (db.getBufferManager().consumedPages() * EFFECTIVE_PAGE_SIZE / 1024.0 / 1024.0 / 1024.0);
    cout << "TPC-C loaded - consumed space in GiB = " << gib << endl;
-   crm.scheduleJobSync(0, [&]() { cout << "Warehouse pages = " << warehouse.btree->countPages() << endl; });
+   //crm.scheduleJobSync(0, [&]() { cout << "Warehouse pages = " << warehouse.btree->countPages() << endl; });
+   if (FLAGS_tpcc_stats) {
+      tpccStats();
+   }
    // -------------------------------------------------------------------------------------
    atomic<u64> keep_running = true;
    atomic<u64> running_threads_counter = 0;
    vector<thread> threads;
    auto random = std::make_unique<leanstore::utils::ZipfGenerator>(FLAGS_tpcc_warehouse_count, FLAGS_zipf_factor);
-   db.startProfilingThread();
    u64 tx_per_thread[FLAGS_worker_threads];
    // -------------------------------------------------------------------------------------
    const u32 exec_threads = FLAGS_tpcc_threads ? FLAGS_tpcc_threads : FLAGS_worker_threads;
@@ -220,6 +258,9 @@ int main(int argc, char** argv)
       });
    }
    // -------------------------------------------------------------------------------------
+   const float rate = FLAGS_tx_rate;
+   std::atomic<u64> next_tx_start_time = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+   // -------------------------------------------------------------------------------------
    for (u64 t_i = 0; t_i < exec_threads - FLAGS_ch_a_threads; t_i++) {
       crm.scheduleJobAsync(t_i, [&, t_i]() {
          running_threads_counter++;
@@ -242,8 +283,14 @@ int main(int argc, char** argv)
                }
             }
          } else {
+            int previousTxNrIfAborted = -1;
+            std::random_device rd;
+            std::mt19937 gen(rd());
+            std::exponential_distribution<> expDist(rate);
+            auto this_expected_start_time = next_tx_start_time.load();
             while (keep_running) {
                utils::Timer timer(CRCounters::myCounters().cc_ms_oltp_tx);
+               auto start = std::chrono::high_resolution_clock::now().time_since_epoch().count();
                jumpmuTry()
                {
                   cr::Worker::my().startTX(leanstore::TX_MODE::OLTP, isolation_level);
@@ -253,7 +300,14 @@ int main(int argc, char** argv)
                   } else {
                      w_id = tpcc.urand(1, FLAGS_tpcc_warehouse_count);
                   }
-                  tpcc.tx(w_id);
+                  //previousTxNrIfAborted = tpcc.tx(w_id);
+                  ///*
+                  if (true || previousTxNrIfAborted == -1) { // retry the tx, because it seems like aborted deliveries will leak neworders in steady_tpcc
+                     auto txInfo = tpcc.getRandomTXInfo();
+                     previousTxNrIfAborted = get<0>(txInfo);
+                  }
+                  tpcc.execTX(w_id, previousTxNrIfAborted);
+                  //*/
                   if (FLAGS_tpcc_abort_pct && tpcc.urand(0, 100) <= FLAGS_tpcc_abort_pct) {
                      cr::Worker::my().abortTX();
                   } else {
@@ -261,10 +315,48 @@ int main(int argc, char** argv)
                   }
                   WorkerCounters::myCounters().tx++;
                   tx_acc = tx_acc + 1;
+                  previousTxNrIfAborted = -1;
                }
                jumpmuCatch()
                {
                   WorkerCounters::myCounters().tx_abort++;
+               }
+               auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+               COUNTERS_BLOCK()
+               {
+                  auto elapsed = now - start;
+                  if (WorkerCounters::myCounters().txHistLock.try_lock()) {
+                     WorkerCounters::myCounters().txHist.increaseSlot(elapsed/1000);
+                     WorkerCounters::myCounters().txHistLock.unlock();
+                  }
+               }
+               if (FLAGS_tx_rate > 0) {
+                  COUNTERS_BLOCK()
+                  {
+                     auto elapsedIncWait = now - this_expected_start_time;
+                     if (WorkerCounters::myCounters().txIncWaitHistLock.try_lock()) {
+                        WorkerCounters::myCounters().txIncWaitHist.increaseSlot(elapsedIncWait/1000);
+                        WorkerCounters::myCounters().txIncWaitHistLock.unlock();
+                     }
+                  }
+                  const auto d = expDist(gen);
+                  const auto dd = std::chrono::nanoseconds((long)(d*1e9)).count();
+                  // reset if we're not able to keep up with the rate
+                  if (now > next_tx_start_time + 5 * 1e9) {
+                     next_tx_start_time = now;
+                     std::cout << "reset start time" << std::endl;
+                  }
+                  this_expected_start_time = next_tx_start_time.load();
+                  while (true) {
+                     while (now < this_expected_start_time) {
+                        std::this_thread::sleep_for(std::chrono::nanoseconds(this_expected_start_time - now - 500));
+                        now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+                     }
+                     // CAS or expected is new next_tx_start_time
+                     if (next_tx_start_time.compare_exchange_strong(this_expected_start_time, this_expected_start_time + dd)) {
+                        break;
+                     }
+                  }
                }
             }
          }
@@ -312,5 +404,10 @@ int main(int argc, char** argv)
    // -------------------------------------------------------------------------------------
    gib = (db.getBufferManager().consumedPages() * EFFECTIVE_PAGE_SIZE / 1024.0 / 1024.0 / 1024.0);
    cout << endl << "consumed space in GiB = " << gib << endl;
+   // print stats about tables, this is not optimized and runs single threaded, so could take a long time.
+   if (FLAGS_tpcc_stats) {
+      cout << "Gathering TPC-C stats ..." << endl;
+      tpccStats();
+   }
    return 0;
 }

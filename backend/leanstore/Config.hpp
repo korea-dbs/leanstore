@@ -1,4 +1,5 @@
 #pragma once
+#include <gflags/gflags_declare.h>
 #include "gflags/gflags.h"
 // -------------------------------------------------------------------------------------
 DECLARE_double(dram_gib);
@@ -115,3 +116,8 @@ DECLARE_bool(persist);
 DECLARE_bool(recover);
 DECLARE_string(persist_file);
 DECLARE_string(recover_file);
+// -------------------------------------------------------------------------------------
+DECLARE_bool(io_trace);
+DECLARE_string(io_trace_file);
+// -------------------------------------------------------------------------------------
+DECLARE_uint64(tx_rate);

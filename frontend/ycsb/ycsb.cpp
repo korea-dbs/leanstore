@@ -9,12 +9,14 @@
 #include "leanstore/utils/Parallelize.hpp"
 #include "leanstore/utils/RandomGenerator.hpp"
 #include "leanstore/utils/ScrambledZipfGenerator.hpp"
+#include "leanstore/utils/RejectionInversionZipf.hpp"
 // -------------------------------------------------------------------------------------
 #include <gflags/gflags.h>
 #include <tbb/parallel_for.h>
 // -------------------------------------------------------------------------------------
 #include <iostream>
 #include <set>
+#include <vector>
 // -------------------------------------------------------------------------------------
 DEFINE_uint32(ycsb_read_ratio, 100, "");
 DEFINE_uint64(ycsb_tuple_count, 0, "");
@@ -63,6 +65,7 @@ int main(int argc, char** argv)
                                     : FLAGS_target_gib * 1024 * 1024 * 1024 * 1.0 / 2.0 / (sizeof(YCSBKey) + sizeof(YCSBPayload));
    // Insert values
    const u64 n = ycsb_tuple_count;
+   db.startProfilingThread();
    // -------------------------------------------------------------------------------------
    if (FLAGS_tmp4) {
       // -------------------------------------------------------------------------------------
@@ -139,24 +142,44 @@ int main(int argc, char** argv)
    }
    // -------------------------------------------------------------------------------------
    auto zipf_random = std::make_unique<utils::ScrambledZipfGenerator>(0, ycsb_tuple_count, FLAGS_zipf_factor);
+   auto rjzipf = RejectionInversionZipfSampler(ycsb_tuple_count, FLAGS_zipf_factor);
+   std::vector<u64> updatePattern;
+   updatePattern.resize(ycsb_tuple_count);
+   for (uint64_t i = 0; i < updatePattern.size(); i++) {
+      updatePattern[i] = i;
+   }
+   std::random_device rd;
+   std::mt19937_64 g(rd());
+   std::shuffle(updatePattern.begin(), updatePattern.end(), g);
    cout << setprecision(4);
    // -------------------------------------------------------------------------------------
    cout << "~Transactions" << endl;
-   db.startProfilingThread();
    atomic<bool> keep_running = true;
    atomic<u64> running_threads_counter = 0;
    const u32 exec_threads = FLAGS_ycsb_threads ? FLAGS_ycsb_threads : FLAGS_worker_threads;
+   const float rate = FLAGS_tx_rate;
+   std::atomic<u64> next_tx_start_time = std::chrono::high_resolution_clock::now().time_since_epoch().count();
    for (u64 t_i = 0; t_i < exec_threads - ((FLAGS_ycsb_sleepy_thread) ? 1 : 0); t_i++) {
       crm.scheduleJobAsync(t_i, [&]() {
          running_threads_counter++;
+         std::random_device rd;
+         std::mt19937_64 gen(rd());
+         std::exponential_distribution<> expDist(rate);
+         auto this_expected_start_time = next_tx_start_time.load();
          while (keep_running) {
+            utils::Timer timer(CRCounters::myCounters().cc_ms_oltp_tx);
+            auto start = std::chrono::high_resolution_clock::now().time_since_epoch().count();
             jumpmuTry()
             {
                YCSBKey key;
                if (FLAGS_zipf_factor == 0) {
                   key = utils::RandomGenerator::getRandU64(0, ycsb_tuple_count);
                } else {
-                  key = zipf_random->rand();
+                  auto r = rjzipf.sample(gen);
+                  if (!(r >= 0 && r < updatePattern.size())) {
+                     raise(SIGINT);
+                  }
+                  key = updatePattern.at(r);
                }
                assert(key < ycsb_tuple_count);
                YCSBPayload result;
@@ -178,6 +201,43 @@ int main(int argc, char** argv)
                WorkerCounters::myCounters().tx++;
             }
             jumpmuCatch() { WorkerCounters::myCounters().tx_abort++; }
+            auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+            COUNTERS_BLOCK()
+            {
+               auto elapsed = now - start;
+               if (WorkerCounters::myCounters().txHistLock.try_lock()) {
+                  WorkerCounters::myCounters().txHist.increaseSlot(elapsed / 1000);
+                  WorkerCounters::myCounters().txHistLock.unlock();
+               }
+            }
+            if (FLAGS_tx_rate > 0) {
+               COUNTERS_BLOCK()
+               {
+                  auto elapsedIncWait = now - this_expected_start_time;
+                  if (WorkerCounters::myCounters().txIncWaitHistLock.try_lock()) {
+                     WorkerCounters::myCounters().txIncWaitHist.increaseSlot(elapsedIncWait / 1000);
+                     WorkerCounters::myCounters().txIncWaitHistLock.unlock();
+                  }
+               }
+               const auto d = expDist(gen);
+               const auto dd = std::chrono::nanoseconds((int)(d * 1e9)).count();
+               // reset if we're not able to keep up with the rate
+               if (now > next_tx_start_time + 5 * 1e9) {
+                  next_tx_start_time = now;
+                  std::cout << "reset start time" << std::endl;
+               }
+               this_expected_start_time = next_tx_start_time.load();
+               while (true) {
+                  while (now < this_expected_start_time) {
+                     std::this_thread::sleep_for(std::chrono::nanoseconds(this_expected_start_time - now - 500));
+                     now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+                  }
+                  // CAS or expected is new next_tx_start_time
+                  if (next_tx_start_time.compare_exchange_strong(this_expected_start_time, this_expected_start_time + dd)) {
+                     break;
+                  }
+               }
+            }
          }
          running_threads_counter--;
       });

@@ -4,6 +4,8 @@
 #include <tbb/enumerable_thread_specific.h>
 
 #include "PerfEvent.hpp"
+#include "leanstore/utils/Hist.hpp"
+
 // -------------------------------------------------------------------------------------
 #include <atomic>
 #include <unordered_map>
@@ -18,6 +20,21 @@ struct WorkerCounters {
    atomic<u64> variable_for_workload = 0;  // Used by tpcc
                                            // -------------------------------------------------------------------------------------
    atomic<u64> worker_id = -1;
+   atomic<u64> order_deletions = 0;
+   atomic<u64> history_deletions = 0;
+   atomic<u64> tpcc_time_in_truncate = 0;
+   atomic<u64> delivery_fail = 0;
+   atomic<u64> tpcc_neworder_insert = 0;
+   atomic<u64> tpcc_neworder_erase = 0;
+   atomic<u64> tpcc_order_insert = 0;
+   atomic<u64> tpcc_order_erase = 0;
+   atomic<u64> tpcc_order_erase_skipped_new_order = 0;
+   atomic<u64> tpcc_order_status_skip = 0;
+   // -------------------------------------------------------------------------------------
+   atomic<u64> seconds = 0;
+   // -------------------------------------------------------------------------------------
+   atomic<u64> free_pids = 0;
+   atomic<u64> free_pids_reused = 0;
    // -------------------------------------------------------------------------------------
    atomic<u64> hot_hit_counter = 0;  // TODO: give it a try ?
    atomic<u64> cold_hit_counter = 0;
@@ -109,6 +126,15 @@ struct WorkerCounters {
    atomic<u64> wal_read_bytes = 0;
    atomic<u64> wal_buffer_hit = 0;
    atomic<u64> wal_buffer_miss = 0;
+   // -------------------------------------------------------------------------------------
+   std::mutex ioReadHistLock;
+   Hist<int, u64> ioReadHist{1000, 0, 20000};
+   std::mutex ioWriteHistLock;
+   Hist<int, u64> ioWriteHist{2000, 0, 100000};
+   std::mutex txHistLock;
+   Hist<int, u64> txHist{10000, 0, 100000};
+   std::mutex txIncWaitHistLock;
+   Hist<int, u64> txIncWaitHist{20000, 0, 200000};
    // -------------------------------------------------------------------------------------
    WorkerCounters() { t_id = workers_counter++; }
    // -------------------------------------------------------------------------------------

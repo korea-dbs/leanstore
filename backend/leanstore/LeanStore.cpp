@@ -26,7 +26,11 @@
 #include <unistd.h>
 
 #include <locale>
+#include <mutex>
+#include <numeric>
 #include <sstream>
+#include <string>
+#include <utility>
 // -------------------------------------------------------------------------------------
 using namespace tabulate;
 using leanstore::utils::threadlocal::sum;
@@ -157,6 +161,8 @@ void LeanStore::startProfilingThread()
       config_hash = configs_table.hash();
       // -------------------------------------------------------------------------------------
       u64 seconds = 0;
+      u64 inital_max_pid = 0;
+      double inital_gib = 0;
       while (bg_threads_keep_running) {
          for (u64 t_i = 0; t_i < tables.size(); t_i++) {
             tables[t_i]->next();
@@ -192,20 +198,67 @@ void LeanStore::startProfilingThread()
          const double cycles_per_tx = cpu_table.workers_agg_events["cycle"] / tx;
          const double l1_per_tx = cpu_table.workers_agg_events["L1-miss"] / tx;
          const double llc_per_tx = cpu_table.workers_agg_events["LLC-miss"] / tx;
+         // -------------------------------------------------------------------------------------
          // using RowType = std::vector<variant<std::string, const char*, Table>>;
          if (FLAGS_print_tx_console) {
             tabulate::Table table;
-            table.add_row({"t", "OLTP TX", "RF %", "Abort%", "OLAP TX", "W MiB", "R MiB", "Instrs/TX", "Cycles/TX", "CPUs", "L1/TX", "LLC/TX", "GHz",
-                           "WAL GiB/s", "GCT GiB/s", "Space G", "GCT Rounds"});
-            table.add_row({std::to_string(seconds), std::to_string(tx), std::to_string(remote_flushes_pct), std::to_string(tx_abort_pct),
-                           std::to_string(olap_tx), bm_table.get("0", "w_mib"), bm_table.get("0", "r_mib"), std::to_string(instr_per_tx),
+            // database used pages
+            double gib = (buffer_manager->consumedPages() * EFFECTIVE_PAGE_SIZE / 1024.0 / 1024.0 / 1024.0);
+            uint64_t maxPid = std::accumulate(buffer_manager->partitions.begin(), buffer_manager->partitions.end(), 0, [](u64 acc, auto& partition) {
+               return std::max(acc, partition->next_pid);
+            });
+            uint64_t totalFree = std::accumulate(buffer_manager->partitions.begin(), buffer_manager->partitions.end(), 0, [](u64 acc, auto& partition) {
+               return acc + partition->freed_pids.size();
+            });
+            if (inital_max_pid == 0) {
+               inital_max_pid = maxPid;
+            }
+            if (inital_gib == 0) {
+               inital_gib = gib;
+            }
+            // -------------------------------------------------------------------------------------
+            // to string rounded
+            // lambda function to convert double to string with 2 decimal places
+            auto to_string_rounded = [](double value, int precision = 2) {
+               std::ostringstream oss;
+               oss << std::fixed << std::setprecision(precision) << value;
+               return oss.str();
+            };
+            std::stringstream ss;
+            ss << std::setprecision(2) << std::fixed;
+            ss << std::setfill('0') << std::setw(2) << seconds / 3600 << ":";
+            std::string time_str = ss.str();
+
+            table.add_row({"t", "OLTP TX", "RF %", "Abort%", 
+                     /*"OLAP TX",*/ "W MiB", "R MiB", /*"Instrs/TX", "Cycles/TX", "CPUs", "L1/TX", "LLC/TX", "GHz",
+                           "WAL GiB/s", "GCT GiB/s","Space G", "GCT Rounds", */ 
+                            "orderdel/tx%", "histdel/tx%", "trunctime/tx%",
+                           "tpcc_debug1", "tpcc_debug2", "tpcc_debug3", 
+                           "DB size", "maxPid", "totalFree", "osskip"});
+            table.add_row({std::to_string(seconds), std::to_string(tx), 
+                        to_string_rounded(remote_flushes_pct), to_string_rounded(tx_abort_pct),
+                           /*std::to_string(olap_tx),*/ 
+                           bm_table.get("0", "w_mib"), bm_table.get("0", "r_mib"), /*std::to_string(instr_per_tx),
                            std::to_string(cycles_per_tx), std::to_string(cpu_table.workers_agg_events["CPU"]), std::to_string(l1_per_tx),
                            std::to_string(llc_per_tx), std::to_string(cpu_table.workers_agg_events["GHz"]), cr_table.get("0", "wal_write_gib"),
-                           cr_table.get("0", "gct_write_gib"), bm_table.get("0", "space_usage_gib"), cr_table.get("0", "gct_rounds")});
+                           cr_table.get("0", "gct_write_gib"),
+                            bm_table.get("0", "space_usage_gib"), cr_table.get("0", "gct_rounds"), */
+                           to_string_rounded(std::stod(bm_table.get("0", "order_deletions"))/tx*100), 
+                           to_string_rounded(std::stod(bm_table.get("0", "history_deletions"))/tx*100),
+                           to_string_rounded(std::stod(bm_table.get("0", "tpcc_time_in_truncate"))/tx*100), 
+                           bm_table.get("0", "tpcc_debug1"),
+                           bm_table.get("0", "tpcc_debug2"),
+                           bm_table.get("0", "tpcc_debug3"),
+                           to_string_rounded(gib, 3)+" +" + to_string_rounded(gib-inital_gib, 3),
+                           std::to_string(maxPid) + " +" + std::to_string(maxPid - inital_max_pid),
+                           std::to_string(totalFree),
+                           bm_table.get("0", "osskip")});
             // -------------------------------------------------------------------------------------
             table.format().width(10);
-            table.column(0).format().width(5);
+            table.column(0).format().width(6);
             table.column(1).format().width(12);
+            table.column(12).format().width(18);
+            table.column(13).format().width(22);
             // -------------------------------------------------------------------------------------
             auto print_table = [](tabulate::Table& table, std::function<bool(u64)> predicate) {
                std::stringstream ss;

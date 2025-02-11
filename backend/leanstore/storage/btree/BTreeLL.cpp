@@ -538,6 +538,11 @@ u64 BTreeLL::countPages()
    return BTreeGeneric::countPages();
 }
 // -------------------------------------------------------------------------------------
+u64 BTreeLL::countInner()
+{
+   return BTreeGeneric::countInner();
+}
+// -------------------------------------------------------------------------------------
 u64 BTreeLL::getHeight()
 {
    return BTreeGeneric::getHeight();

@@ -121,3 +121,8 @@ DEFINE_bool(persist, false, "");
 DEFINE_bool(recover, false, "");
 DEFINE_string(persist_file, "./leanstore.json", "Where should the persist config be saved to?");
 DEFINE_string(recover_file, "./leanstore.json", "Where should the recover config be loaded from?");
+// -------------------------------------------------------------------------------------
+DEFINE_bool(io_trace, false, "");
+DEFINE_string(io_trace_file, "./iotrace.csv", "io trace file");
+// -------------------------------------------------------------------------------------
+DEFINE_uint64(tx_rate, 0, "");

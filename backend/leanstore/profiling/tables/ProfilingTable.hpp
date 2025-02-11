@@ -7,7 +7,7 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
-#include <unordered_map>
+#include <map>
 #include <vector>
 // -------------------------------------------------------------------------------------
 namespace leanstore
@@ -54,7 +54,7 @@ using ColumnValues = std::vector<std::string>;
 class ProfilingTable
 {
   protected:
-   std::unordered_map<std::string, Column> columns;
+   std::map<std::string, Column> columns;
 
   public:
    // Open -> getColumns() -> next -> getColumns()
@@ -79,7 +79,7 @@ class ProfilingTable
    virtual std::string getName() { return "null"; };
    virtual void open(){};
    virtual void next(){};
-   virtual std::unordered_map<std::string, Column>& getColumns() { return columns; }
+   virtual std::map<std::string, Column>& getColumns() { return columns; }
    Column& operator[](std::string name) { return columns.at(name); }
 };
 }  // namespace profiling

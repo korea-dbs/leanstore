@@ -31,6 +31,7 @@ void ConfigsTable::open()
    columns.emplace("c_partition_bits", [&](Column& col) { col << FLAGS_partition_bits; });
    columns.emplace("c_dram_gib", [&](Column& col) { col << FLAGS_dram_gib; });
    columns.emplace("c_ssd_gib", [&](Column& col) { col << FLAGS_ssd_gib; });
+   columns.emplace("c_ssd_path", [&](Column& col) { col << FLAGS_ssd_path; });
    columns.emplace("c_target_gib", [&](Column& col) { col << FLAGS_target_gib; });
    columns.emplace("c_run_for_seconds", [&](Column& col) { col << FLAGS_run_for_seconds; });
    columns.emplace("c_bulk_insert", [&](Column& col) { col << FLAGS_bulk_insert; });
@@ -67,6 +68,7 @@ void ConfigsTable::open()
    columns.emplace("c_olap_mode", [&](Column& col) { col << FLAGS_olap_mode; });
    columns.emplace("c_graveyard", [&](Column& col) { col << FLAGS_graveyard; });
    columns.emplace("c_history_tree_inserts", [&](Column& col) { col << FLAGS_history_tree_inserts; });
+   columns.emplace("c_tx_rate", [&](Column& col) { col << FLAGS_tx_rate; });
    // -------------------------------------------------------------------------------------
    for (auto& c : columns) {
       c.second.generator(c.second);

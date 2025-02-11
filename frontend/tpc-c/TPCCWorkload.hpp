@@ -1,4 +1,5 @@
 #pragma once
+#include <bits/ranges_cmp.h>
 #include "Schema.hpp"
 #include "Units.hpp"
 // -------------------------------------------------------------------------------------
@@ -11,6 +12,7 @@
 // -------------------------------------------------------------------------------------
 #include <vector>
 using std::vector;
+DEFINE_bool(steady_tpcc, false, "");
 // -------------------------------------------------------------------------------------
 template <template <typename> class AdapterType>
 class TPCCWorkload
@@ -171,11 +173,14 @@ class TPCCWorkload
             all_local = 0;
       Numeric cnt = lineNumbers.size();
       Integer carrier_id = 0; /*null*/
+      leanstore::WorkerCounters::myCounters().tpcc_order_insert++;
       order.insert({w_id, d_id, o_id}, {c_id, timestamp, carrier_id, cnt, all_local});
       if (order_wdc_index) {
+         ensure(c_id <= 3000 && c_id > 0);
          order_wdc.insert({w_id, d_id, c_id, o_id}, {});
       }
       neworder.insert({w_id, d_id, o_id}, {});
+      leanstore::WorkerCounters::myCounters().tpcc_neworder_insert++;
 
       for (unsigned i = 0; i < lineNumbers.size(); i++) {
          Integer qty = qtys[i];
@@ -191,7 +196,6 @@ class TPCCWorkload
              },
              stock_update_descriptor);
       }
-
       for (unsigned i = 0; i < lineNumbers.size(); i++) {
          Integer lineNumber = lineNumbers[i];
          Integer supware = supwares[i];
@@ -242,6 +246,74 @@ class TPCCWorkload
          orderline.insert({w_id, d_id, o_id, lineNumber}, {itemid, supware, ol_delivery_d, qty, ol_amount, s_dist});
          // TODO: i_data, s_data
       }
+      /*
+      if (FLAGS_steady_tpcc) {
+         // get all older (older than the new o_id) orders from customer
+         vector<Integer> oldOrderIds;
+         order_wdc.scan(
+             {w_id, d_id, c_id, minInteger},
+             [&](const order_wdc_t::Key& key, const order_wdc_t& rec) -> bool {
+                if (key.o_w_id == w_id && key.o_d_id == d_id && key.o_c_id == c_id && key.o_id < o_id) {
+                   oldOrderIds.push_back(key.o_id);
+                   return true;
+                }
+                return false;
+             },
+             []() {});
+         int deleteCount = 0;
+         int skippedNewOrder = 0;
+         for (Integer old_o_id : oldOrderIds) {
+             bool skip_this_order = false;
+             // Check if order was delivered (maybe unnecessary?)
+             //order.lookup1(
+             //    {w_id, d_id, old_o_id},
+             //    [&](const order_t& rec) {
+             //        if (rec.o_carrier_id == 0) {
+             //            skip_this_order = true;  // not yet delivered
+             //          }
+             //    });
+             //if (skip_this_order)
+            //     continue;
+             // Check if a neworder exists for this order
+             bool isNewOrder = false;
+             neworder.scan(
+                {w_id, d_id, old_o_id},
+                [&](const neworder_t::Key &key, const neworder_t &rec) -> bool {
+                   if (key.no_w_id == w_id && key.no_d_id == d_id && key.no_o_id == old_o_id) {
+                      isNewOrder = true;
+                   }
+                   return false;
+                },
+                [](){});
+             if (isNewOrder) {
+                skippedNewOrder++;
+                leanstore::WorkerCounters::myCounters().tpcc_order_erase_skipped_new_order++;
+                continue;
+             }
+             // delete order_wdc, orderline, and order
+             order_wdc.erase({w_id, d_id, c_id, old_o_id});
+             vector<orderline_t::Key> orderlineKeys;
+             orderline.scan(
+                 {w_id, d_id, old_o_id, minInteger},
+                 [&](const orderline_t::Key& key, const orderline_t& rec) -> bool {
+                    if (key.ol_w_id == w_id && key.ol_d_id == d_id && key.ol_o_id == old_o_id) {
+                       orderlineKeys.push_back(key);
+                       return true;
+                    }
+                    return false;
+                 },
+                 [](){});
+             for (auto& ol_key : orderlineKeys) {
+                 orderline.erase(ol_key);
+             }
+             order.erase({w_id, d_id, old_o_id});
+             leanstore::WorkerCounters::myCounters().tpcc_order_erase++;
+             COUNTERS_BLOCK() { leanstore::WorkerCounters::myCounters().order_deletions++; }
+             deleteCount++;
+         }
+         //cout << "o " << oldOrderIds.size() << " sn " << skippedNewOrder << " d " << deleteCount << endl;
+      }
+      */
    }
    // -------------------------------------------------------------------------------------
    void newOrderRnd(Integer w_id)
@@ -288,11 +360,13 @@ class TPCCWorkload
              [&]() { o_id = minInteger; });
          // -------------------------------------------------------------------------------------
          if (o_id == minInteger) {  // Should rarely happen
-            cout << "WARNING: delivery tx skipped for warehouse = " << w_id << ", district = " << d_id << endl;
+            //cout << "WARNING: delivery tx skipped for warehouse = " << w_id << ", district = " << d_id << endl;
+            COUNTERS_BLOCK() { leanstore::WorkerCounters::myCounters().delivery_fail++; }
             continue;
          }
          // -------------------------------------------------------------------------------------
          if (tpcc_remove) {
+            leanstore::WorkerCounters::myCounters().tpcc_neworder_erase++;
             const auto ret = neworder.erase({w_id, d_id, o_id});
             ensure(ret || manually_handle_isolation_anomalies);
          }
@@ -444,16 +518,24 @@ class TPCCWorkload
       // -------------------------------------------------------------------------------------
       // latest order id desc
       if (order_wdc_index) {
+         bool found = false;
          order_wdc.scanDesc(
              {w_id, d_id, c_id, std::numeric_limits<Integer>::max()},
              [&](const order_wdc_t::Key& key, const order_wdc_t&) {
-                assert(key.o_w_id == w_id);
-                assert(key.o_d_id == d_id);
-                assert(key.o_c_id == c_id);
-                o_id = key.o_id;
+                if (key.o_w_id == w_id && key.o_d_id == d_id && key.o_c_id == c_id) {
+                   o_id = key.o_id;
+                   found = true;
+                   return false;
+                }
                 return false;
-             },
+               },
              [] {});
+         if (!found) {
+            leanstore::WorkerCounters::myCounters().tpcc_order_status_skip++;
+            return;
+         } else {
+            assert(found);
+         }
       } else {
          order.scanDesc(
              {w_id, d_id, std::numeric_limits<Integer>::max()},
@@ -471,10 +553,30 @@ class TPCCWorkload
       Timestamp o_entry_d;
       Integer o_carrier_id;
 
-      order.lookup1({w_id, d_id, o_id}, [&](const order_t& rec) {
-         o_entry_d = rec.o_entry_d;
-         o_carrier_id = rec.o_carrier_id;
-      });
+      if (!FLAGS_steady_tpcc) {
+         order.lookup1({w_id, d_id, o_id}, [&](const order_t& rec) {
+            o_entry_d = rec.o_entry_d;
+            o_carrier_id = rec.o_carrier_id;
+         });
+      } else {
+         bool found = false;
+         order.scan(
+             {w_id, d_id, o_id},
+             [&](const order_t::Key& key, const order_t& rec) {
+                if (key.o_w_id == w_id && key.o_d_id == d_id && key.o_id == o_id) {
+                   o_entry_d = rec.o_entry_d;
+                   o_carrier_id = rec.o_carrier_id;
+                   found = true;
+                   return true;
+                }
+                return false; // not found
+             },
+             [&]() {});
+         if (!found) {
+            leanstore::WorkerCounters::myCounters().tpcc_order_status_skip++;
+            return;
+         }
+      }
       Integer ol_i_id;
       Integer ol_supply_w_id;
       Timestamp ol_delivery_d;
@@ -888,8 +990,12 @@ class TPCCWorkload
    void loadDistrinct(Integer w_id)
    {
       for (Integer i = 1; i < 11; i++) {
+         int next_o_id = 3001;
+         if (false && FLAGS_steady_tpcc) {
+            next_o_id = 3000*10+1;
+         }
          district.insert({w_id, i}, {randomastring<10>(6, 10), randomastring<20>(10, 20), randomastring<20>(10, 20), randomastring<20>(10, 20),
-                                     randomastring<2>(2, 2), randomzip(), randomNumeric(0.0000, 0.2000), 3000000, 3001});
+                                     randomastring<2>(2, 2), randomzip(), randomNumeric(0.0000, 0.2000), 3000000, next_o_id});
       }
    }
    // -------------------------------------------------------------------------------------
@@ -920,29 +1026,35 @@ class TPCCWorkload
       vector<Integer> c_ids;
       for (Integer i = 1; i <= 3000; i++)
          c_ids.push_back(i);
+      int x2100 = 2100;
+      if (false && FLAGS_steady_tpcc) {
+         int times = 10;
+         x2100 = 3000*times-(3000-x2100);
+         for (int j = 0; j < times-1; j++)
+            for (Integer i = 1; i <= 3000; i++)
+               c_ids.push_back(i);
+      }
       random_shuffle(c_ids.begin(), c_ids.end());
       Integer o_id = 1;
       for (Integer o_c_id : c_ids) {
-         Integer o_carrier_id = (o_id < 2101) ? rnd(10) + 1 : 0;
+         Integer o_carrier_id = (o_id < x2100+1) ? rnd(10) + 1 : 0;
          Numeric o_ol_cnt = rnd(10) + 5;
-
          order.insert({w_id, d_id, o_id}, {o_c_id, now, o_carrier_id, o_ol_cnt, 1});
          if (order_wdc_index) {
+            ensure(o_c_id <= 3000 && o_c_id > 0);
             order_wdc.insert({w_id, d_id, o_c_id, o_id}, {});
          }
-
          for (Integer ol_number = 1; ol_number <= o_ol_cnt; ol_number++) {
             Timestamp ol_delivery_d = 0;
-            if (o_id < 2101)
+            if (o_id < x2100+1)
                ol_delivery_d = now;
-            Numeric ol_amount = (o_id < 2101) ? 0 : randomNumeric(0.01, 9999.99);
+            Numeric ol_amount = (o_id < x2100+1) ? 0 : randomNumeric(0.01, 9999.99);
             const Integer ol_i_id = rnd(ITEMS_NO) + 1;
             orderline.insert({w_id, d_id, o_id, ol_number}, {ol_i_id, w_id, ol_delivery_d, 5, ol_amount, randomastring<24>(24, 24)});
          }
          o_id++;
       }
-
-      for (Integer i = 2100; i <= 3000; i++)
+      for (Integer i = x2100; i <= c_ids.size(); i++)
          neworder.insert({w_id, d_id, i}, {});
    }
    // -------------------------------------------------------------------------------------
@@ -990,24 +1102,33 @@ class TPCCWorkload
    // <tx_num, read_only>
    std::tuple<s32, bool> getRandomTXInfo()
    {
-      u64 rnd = leanstore::utils::RandomGenerator::getRand(0, 10000);
+      int max_weighted = 10000;
+      if (FLAGS_steady_tpcc) {
+         max_weighted = 4300+400*3+50+4000; // neworder must be exactly 10x delivery 
+      }
+      u64 rnd = leanstore::utils::RandomGenerator::getRand(0, max_weighted);
       if (rnd < 4300) {
-         return {0, false};
+         return {0, false}; // payment
       }
       rnd -= 4300;
       if (rnd < 400) {
-         return {1, true};
+         return {1, true}; // order
+      }
+      rnd -= 400;
+      //if (rnd < 400 || FLAGS_steady_tpcc && leanstore::WorkerCounters::myCounters().tpcc_debug2*1 < leanstore::WorkerCounters::myCounters().tpcc_debug1) {
+      if (!FLAGS_steady_tpcc && rnd < 400 || FLAGS_steady_tpcc && (leanstore::WorkerCounters::myCounters().tpcc_neworder_insert/*insert*/ > 100+leanstore::WorkerCounters::myCounters().tpcc_neworder_erase/*erase*/)) {
+      ///if (rnd < 400) {
+         return {2, false}; // delivery
       }
       rnd -= 400;
       if (rnd < 400) {
-         return {2, false};
+         return {3, true}; // stocklevel
       }
-      rnd -= 400;
-      if (rnd < 400) {
-         return {3, true};
+      rnd -= 400; 
+      if (FLAGS_steady_tpcc && rnd < 50 ) {
+         return {5, false}; // truncateHist
       }
-      rnd -= 400;
-      return {4, false};
+      return {4, false}; // newOrder remainder
    }
    // -------------------------------------------------------------------------------------
    void execTX(Integer w_id, s32 tx_number)
@@ -1022,35 +1143,154 @@ class TPCCWorkload
          stockLevelRnd(w_id);
       } else if (tx_number == 4) {
          newOrderRnd(w_id);
+      } else if (tx_number == 5) {
+         truncateOldHistoryTxn(w_id);
+      } else {
+         ensure(false);
       }
    }
-   // -------------------------------------------------------------------------------------
-   int tx(Integer w_id)
+
+   Integer initialOrdersPerDistrict = 0;
+   Integer initialHistory = 0;
+   void truncateOldHistoryTxn(Integer w_id)
    {
-      // micro-optimized version of weighted distribution
-      u64 rnd = leanstore::utils::RandomGenerator::getRand(0, 10000);
-      if (rnd < 4300) {
-         paymentRnd(w_id);
-         return 0;
+      ensure(tpcc_remove && order_wdc_index); // order_wdc is requirded at the moment to quickly find the latest order of a customer
+      // ORDER
+      // delete neworder entries
+      // truncate order, orderline, and order_wdc
+      for (Integer d_id = 1; d_id <= 10; d_id++)
+      {
+         // The initial number of orders loaded equals (d_next_o_id - 1)
+         if (initialOrdersPerDistrict == 0) {
+            initialOrdersPerDistrict = district.lookupField({w_id, d_id}, &district_t::d_next_o_id) - 1;
+            std::cout << "initial orders per district: " << initialOrdersPerDistrict << std::endl;
+         }
+         Integer current_o_id = district.lookupField({w_id, d_id}, &district_t::d_next_o_id);
+         if (current_o_id <= initialOrdersPerDistrict)
+            continue;
+         Integer cutoff_o_id = current_o_id - initialOrdersPerDistrict - 100;
+         vector<Integer> ordersToDelete_o_id;
+         vector<Integer> ordersToDelete_o_c_id;
+         order.scan(
+             {w_id, d_id, minInteger},
+             [&](const order_t::Key& key, const order_t& rec) -> bool {
+                if (key.o_w_id == w_id && key.o_d_id == d_id && key.o_id < cutoff_o_id) {
+                   ordersToDelete_o_id.push_back(key.o_id);
+                   ordersToDelete_o_c_id.push_back(rec.o_c_id);
+                   return true;
+                }
+                return false;
+             },
+             []() {});
+         for (int i = 0; i < ordersToDelete_o_id.size(); i++) {
+            auto o_id = ordersToDelete_o_id[i];
+            auto o_c_id = ordersToDelete_o_c_id[i];
+            // check that this is not the last order from the customer
+            /*
+            vector<typename order_wdc_t::Key> orderwdcKeys;
+            bool customerHasMoreOrders = false;
+            bool orderFound = false;
+            order_wdc.scan(
+                {w_id, d_id, o_c_id, minInteger},
+                [&](const order_wdc_t::Key& key, const order_wdc_t& rec) -> bool {
+                   if (key.o_w_id == w_id && key.o_d_id == d_id && key.o_c_id == o_c_id) {
+                      if (!orderFound) {
+                         orderwdcKeys.push_back(key);
+                         orderFound = true;
+                         return true;
+                      }
+                      customerHasMoreOrders = true;
+                   }
+                   return false;
+                },
+                []() {});
+            if (!customerHasMoreOrders) {
+               continue;
+            }
+            // also make sure it is not a neworder..
+            bool isNewOrder = false;
+            neworder.scan(
+                {w_id, d_id, o_id},
+                [&](const neworder_t::Key& key, const neworder_t& rec) -> bool {
+                   if (key.no_w_id == w_id && key.no_d_id == d_id && key.no_o_id == o_id) {
+                      isNewOrder = true;
+                   }
+                   return false;
+                },
+                []() {});
+            if (isNewOrder) {
+               continue;
+            }
+            */
+            // ok, delete entries
+            bool orderWdcFound = false;
+            order_wdc.scan( // this is not needed, but prevents anomalisies
+               {w_id, d_id, o_c_id, o_id},
+               [&](const order_wdc_t::Key& key, const order_wdc_t& rec) -> bool {
+                  if (key.o_w_id == w_id && key.o_d_id == d_id && key.o_c_id == o_c_id && key.o_id == o_id) {
+                     orderWdcFound = true;
+                  }
+                  return false;
+               },
+               []() {});
+            if (orderWdcFound) {
+               order_wdc.erase({w_id, d_id, o_c_id, o_id});
+            }
+            vector<typename orderline_t::Key> orderlineKeys;
+            orderline.scan(
+               {w_id, d_id, o_id, minInteger},
+               [&](const orderline_t::Key& key, const orderline_t& rec) -> bool {
+                  if (key.ol_w_id == w_id && key.ol_d_id == d_id && key.ol_o_id == o_id) {
+                     orderlineKeys.push_back(key);
+                     return true;
+                  }
+                  return false;
+               },
+               []() {});
+            for (auto& ol_key : orderlineKeys) {
+               orderline.erase(ol_key);
+            }
+            // std::cout << "order deleted: " << o_id << std::endl;
+            order.erase({w_id, d_id, o_id});
+            COUNTERS_BLOCK()
+            {
+               leanstore::WorkerCounters::myCounters().order_deletions++;
+            }
+         }
       }
-      rnd -= 4300;
-      if (rnd < 400) {
-         orderStatusRnd(w_id);
-         return 1;
+      // HISTORY
+      // truncate history
+      const Integer maxHistoryPerThread = 30000 * warehouseCount / FLAGS_worker_threads;  // 30k per wearhouse
+      Integer t_id = (Integer)leanstore::WorkerCounters::myCounters().t_id;
+      Integer max_h_pk = 0;
+      // get the current highest history h_id for this thread (which is like an auto increment)
+      history.scanDesc(
+            {t_id, std::numeric_limits<Integer>::max()},
+            [&](const history_t::Key &key, const history_t &rec) -> bool {
+               max_h_pk = key.h_pk;
+               return false;
+            },
+            []() {});
+      // delete all h's belonging to this thread if thery are too old (maxHistoryPerThread) 
+      Integer cutoff_h_pk = max_h_pk - maxHistoryPerThread;
+      vector<typename history_t::Key> historyKeys;
+      history.scan(
+         {t_id, 0}, // search oldest h for this thread
+         [&](const history_t::Key &key, const history_t &rec) -> bool {
+            if (key.h_pk <= cutoff_h_pk) {
+               if (key.thread_id == t_id) { // only delete h's belonging to this thread
+                  historyKeys.push_back(key);
+               }
+               return true;
+            }
+            return false;
+         },
+         []() {});
+      for (auto &h_key : historyKeys) {
+         history.erase(h_key);
+         COUNTERS_BLOCK() { leanstore::WorkerCounters::myCounters().history_deletions++; }
+         //std::cout << "erase hist: " << h_key.id << " " << h_key.thread_id << " " << h_key.h_pk << std::endl;
       }
-      rnd -= 400;
-      if (rnd < 400) {
-         deliveryRnd(w_id);
-         return 2;
-      }
-      rnd -= 400;
-      if (rnd < 400) {
-         stockLevelRnd(w_id);
-         return 3;
-      }
-      rnd -= 400;
-      newOrderRnd(w_id);
-      return 4;
    }
    // -------------------------------------------------------------------------------------
    template <typename Relation>
@@ -1150,4 +1390,5 @@ class TPCCWorkload
          UNREACHABLE();
       }
    }
+
 };

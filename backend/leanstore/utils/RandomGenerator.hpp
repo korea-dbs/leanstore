@@ -30,7 +30,7 @@ class MersenneTwister
 }  // namespace leanstore
 // -------------------------------------------------------------------------------------
 static thread_local leanstore::utils::MersenneTwister mt_generator;
-static thread_local std::mt19937 random_generator;
+static thread_local std::mt19937 random_generator(std::random_device{}());
 // -------------------------------------------------------------------------------------
 namespace leanstore
 {
@@ -39,16 +39,21 @@ namespace utils
 // -------------------------------------------------------------------------------------
 class RandomGenerator
 {
-  public:
+  public:/**/
    // ATTENTION: open interval [min, max)
    static u64 getRandU64(u64 min, u64 max)
    {
+      return getRandU64STD(min, max);
+      /*
       u64 rand = min + (mt_generator.rnd() % (max - min));
       assert(rand < max);
       assert(rand >= min);
       return rand;
+      */
    }
-   static u64 getRandU64() { return mt_generator.rnd(); }
+   static u64 getRandU64() { 
+      return random_generator();// mt_generator.rnd();
+   }
    static u64 getRandU64STD(u64 min, u64 max)
    {
       std::uniform_int_distribution<u64> distribution(min, max - 1);
@@ -57,7 +62,7 @@ class RandomGenerator
    template <typename T>
    static inline T getRand(T min, T max)
    {
-      u64 rand = getRandU64(min, max);
+      u64 rand = getRandU64STD(min, max);
       return static_cast<T>(rand);
    }
    static void getRandString(u8* dst, u64 size);

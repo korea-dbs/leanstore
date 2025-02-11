@@ -267,8 +267,18 @@ void BufferManager::pageProviderThread(u64 p_begin, u64 p_end)  // [p_begin, p_e
       evict_candidate_bfs.clear();
       // -------------------------------------------------------------------------------------
       // Phase 3:
+      auto start = std::chrono::high_resolution_clock::now();
       if (async_write_buffer.submit()) {
          const u32 polled_events = async_write_buffer.pollEventsSync();
+         COUNTERS_BLOCK() {
+            auto end = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+            if (WorkerCounters::myCounters().ioWriteHistLock.try_lock()) {
+               WorkerCounters::myCounters().ioWriteHist.increaseSlot(elapsed);
+               WorkerCounters::myCounters().ioWriteHistLock.unlock();
+            }
+         }
+         
          async_write_buffer.getWrittenBfs(
              [&](BufferFrame& written_bf, u64 written_lsn, PID out_of_place_pid) {
                 jumpmuTry()
