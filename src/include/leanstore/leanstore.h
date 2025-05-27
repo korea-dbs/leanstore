@@ -51,7 +51,7 @@ class LeanStore {
 
   // Misc
   ZipfGenerator gen;
-  std::unordered_map<std::type_index, std::unique_ptr<KVInterface>> indexes;  // Stupid Catalog
+  std::unordered_map<std::string, std::unique_ptr<KVInterface>> indexes;  // Stupid Catalog
 
   LeanStore();
   ~LeanStore();
@@ -59,8 +59,8 @@ class LeanStore {
   void CheckDuringIdle();
 
   // Catalog operations
-  void RegisterTable(const std::type_index &relation, u32 relation_idx);
-  auto RetrieveIndex(const std::type_index &relation) -> KVInterface *;
+  void RegisterTable(const std::string& relation, u32 relation_idx);
+  auto RetrieveIndex(const std::string& relation) -> KVInterface *;
 
   // Convenient txn helpers
   void StartTransaction(timestamp_t txn_arrival_time = 0, Transaction::Mode tx_mode = Transaction::Mode::OLTP,

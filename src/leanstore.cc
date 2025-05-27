@@ -235,7 +235,7 @@ void LeanStore::CheckDuringIdle() {
 }
 
 // -------------------------------------------------------------------------------------
-void LeanStore::RegisterTable(const std::type_index &relation, uint32_t relation_idx) {
+void LeanStore::RegisterTable(const std::string& relation, uint32_t relation_idx) {
   assert(indexes.find(relation) == indexes.end());
   assert(FLAGS_worker_count > 0);
   if (FLAGS_wal_enable_recovery) { Ensure(recovery->HasRecovered(METADATA_PAGE_ID)); }
@@ -246,7 +246,7 @@ void LeanStore::RegisterTable(const std::type_index &relation, uint32_t relation
   });
 }
 
-auto LeanStore::RetrieveIndex(const std::type_index &relation) -> KVInterface * {
+auto LeanStore::RetrieveIndex(const std::string& relation) -> KVInterface * {
   assert(indexes.find(relation) != indexes.end());
   return indexes.at(relation).get();
 }

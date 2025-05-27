@@ -14,8 +14,8 @@
 template <class RecordBase>
 LeanStoreAdapter<RecordBase>::LeanStoreAdapter(leanstore::LeanStore &db)
     : relation_(static_cast<std::type_index>(typeid(RecordBase))), db_(&db) {
-  db_->RegisterTable(relation_, RecordBase::TYPE_ID);  // TYPE_ID is a part of the LeanStore stupid catalog
-  tree_ = db_->RetrieveIndex(relation_);
+  db_->RegisterTable(relation_.name(), RecordBase::TYPE_ID);  // TYPE_ID is a part of the LeanStore stupid catalog
+  tree_ = db_->RetrieveIndex(relation_.name());
 }
 
 template <class RecordBase>
