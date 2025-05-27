@@ -1,0 +1,234 @@
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+- name: Initialize some default values
+  hosts: all
+  connection: ssh
+  tasks:
+    - set_fact:
+        ssh_user: "{{ lookup('ansible.builtin.config', 'remote_user', plugin_type='connection', plugin_name='ssh', on_missing='skip') }}"
+        private_key: "{{ lookup('ansible.builtin.config', 'private_key_file', plugin_type='connection', plugin_name='ssh', on_missing='skip') }}"
+    - amazon.aws.ec2_metadata_facts:
+
+- name: Setup nvme devices
+  hosts: sls:client
+  connection: ssh
+  become: true
+  tasks:
+    - name: Initialize empty list for devices
+      set_fact:
+        storage_devices: []
+      no_log: true
+    - name: Get NVMe devices
+      set_fact:
+        storage_devices: "{{ storage_devices + ['/dev/' ~ item.key ] }}"
+      with_dict: "{{ ansible_devices }}"
+      when: "item.key.startswith('nvme') and not item.value.partitions"
+    - name: Chmod disks
+      ansible.builtin.file:
+        path: "{{ item }}"
+        mode: 0777
+      loop: "{{ storage_devices }}"
+
+- name: Install dependencies
+  hosts: sls:client
+  connection: ssh
+  become: true
+  tasks:
+    - name: Install packages
+      ansible.builtin.package:
+        state: latest
+        update_cache: true
+        name:
+          - numactl
+          - htop
+          - iotop
+          - clang
+          - g++
+          - gcc
+          - make
+    - name: Install build depdencies on RedHat/CentOS
+      ansible.builtin.package:
+        state: latest
+        name:
+          - clang-devel
+      when:
+        - ansible_facts['distribution'] == 'RedHat' or ansible_facts['distribution'] == 'CentOS'
+    - name: Install build dependencies on Debain/Ubuntu
+      ansible.builtin.package:
+        state: latest
+        name:
+          - llvm-dev
+          - libclang-dev
+      when:
+        - ansible_facts['distribution'] == 'Debian' or ansible_facts['distribution'] == 'Ubuntu'
+
+- name: Cargo/Rust installation
+  hosts: sls:client
+  connection: ssh
+  become: false
+  gather_facts: False
+  tasks:
+    - name: check if cargo is installed
+      shell: . "$HOME/.cargo/env" && command -v cargo
+      register: cargo_exists
+      ignore_errors: yes
+
+    - name: Download Installer
+      when: cargo_exists is failed
+      get_url:
+        url: https://sh.rustup.rs
+        dest: /tmp/sh.rustup.rs
+        mode: '0777'
+        force: 'yes'
+      tags:
+        - rust
+
+    - name: install rust/cargo
+      when: cargo_exists is failed
+      shell: /tmp/sh.rustup.rs -y
+      tags:
+        - rust
+
+- name: Copy and compile code
+  hosts: sls
+  connection: ssh
+  become: false
+  gather_facts: False
+  tasks:
+    - name: Synchronize passing in extra rsync options
+      synchronize:
+        src: "{{ playbook_dir }}/../../share_libs/segmentstore/"
+        dest: "~/segmentstore"
+        rsync_opts:
+          - "--no-motd"
+          - "--exclude=.git"
+          - "--exclude=target"
+          - "--exclude=cloud_deployment"
+    - name: Compile code
+      shell: . "$HOME/.cargo/env" && RUSTFLAGS="-Ctarget-cpu=native" cargo build -r
+      args:
+        chdir: ~/segmentstore
+
+- name: Leanstore client setup
+  hosts: client
+  connection: ssh
+  become: true
+  tasks:
+    - name: Install leanstore build dependencies
+      ansible.builtin.package:
+        state: latest
+        name:
+          - autoconf
+          - automake
+          - libtool
+          - curl
+          - make
+          - cmake
+          - unzip
+          - g++
+          - clang
+          - maven
+          - openjdk-17-jdk
+    - name: Install build depdencies on RedHat/CentOS
+      ansible.builtin.package:
+        state: latest
+        name:
+          - tbb-devel
+          - fmt-devel
+          - gflags-devel
+          - liburing-devel
+          - zstd-devel
+          - libcurl-devel
+          - benchmark-devel
+          - boost
+          - boost-devel
+          - postgresql-devel
+          - clang
+          - clang-tools-extra
+          - mysql-connector-c++-devel
+          - fuse-devel
+          - sqlite-devel
+      when:
+        - ansible_facts['distribution'] == 'RedHat' or ansible_facts['distribution'] == 'CentOS'
+    - name: Install build dependencies on Debain/Ubuntu
+      ansible.builtin.package:
+        state: latest
+        name:
+          - libtbb-dev
+          - libfmt-dev
+          - libgflags-dev
+          - liburing-dev
+          - libzstd-dev
+          - libcurl4-openssl-dev
+          - libbenchmark-dev
+          - libboost-all-dev
+          - libgtest-dev
+          - libgmock-dev
+          - libpq-dev
+          - clang-format
+          - clang-tidy
+          - libmysqlcppconn-dev
+          - libfuse-dev
+          - libwiredtiger-dev
+          - librocksdb-dev
+          - libsqlite3-dev
+      when:
+        - ansible_facts['distribution'] == 'Debian' or ansible_facts['distribution'] == 'Ubuntu'
+
+- name: Copy LeanStore
+  hosts: client
+  connection: ssh
+  become: false
+  gather_facts: False
+  tasks:
+    - name: Synchronize passing in extra rsync options
+      synchronize:
+        src: "{{ playbook_dir }}/../../"
+        dest: "~/leanstore"
+        rsync_opts:
+          - "--no-motd"
+          - "--exclude=.git"
+          - "--exclude=build"
+          - "--exclude=release"
+          - "--exclude=test"
+          - "--exclude=cloud_deployment"
+          - "--exclude=experiments"
+
+- name: List host addresses
+  hosts: localhost
+  become: false
+  gather_facts: False
+  tasks:
+    - debug:
+        msg:
+        - "Private IP: {{ hostvars[item]['ansible_ec2_local_ipv4'] }}"
+        - "SSD paths: {{ hostvars[item]['storage_devices'] }}"
+        - "ssh {{ hostvars[item]['ssh_user'] }}@{{ hostvars[item]['ansible_ec2_public_hostname'] }} -i {{ hostvars[item]['private_key'] }}"
+        - "Start server with: ~/rust-segmentstore/target/release/rust-segmentstore server --ip {{ hostvars[item]['ansible_ec2_local_ipv4'] }}:50000 --ssd-paths {{ hostvars[item]['storage_devices'] | join(' ') }} --number-threads 1"
+        - "Server('n01', '{{ hostvars[item]['ansible_ec2_local_ipv4'] }}', SERVER_PORT, ssd='{{ hostvars[item]['storage_devices'] | join(' ') }}'),"
+      with_items: "{{ groups['sls'] }}"
+    - debug:
+        msg:
+        - "Private IP: {{ hostvars[item]['ansible_ec2_local_ipv4'] }}"
+        - "ssh {{ hostvars[item]['ssh_user'] }}@{{ hostvars[item]['ansible_ec2_public_hostname'] }} -i {{ hostvars[item]['private_key'] }}"
+        - "Server('c01', '{{ hostvars[item]['ansible_ec2_local_ipv4'] }}', SERVER_PORT),"
+      with_items: "{{ groups['client'] }}"
+    - name: Lsyncd output
+      debug:
+        msg:
+        - "{ ip = '{{ hostvars[item]['ansible_ec2_public_hostname'] }}', port = 22 },"
+      with_items:
+        - "{{ groups['sls'] }}"
+        - "{{ groups['client'] }}"

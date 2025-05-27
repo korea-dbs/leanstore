@@ -1,0 +1,48 @@
+---
+- import_playbook: deploy.yaml
+
+- name: Install distexp dependencies
+  hosts: sls:client
+  connection: ssh
+  become: true
+  tasks:
+    - name: Install packages
+      ansible.builtin.package:
+        state: latest
+        update_cache: true
+        name:
+          - tmux
+          - python-pip
+    - name: Install pipx on ubuntu
+      ansible.builtin.package:
+        state: latest
+        update_cache: true
+        name:
+          - pipx
+      when:
+        - ansible_facts['distribution'] == 'Debian' or ansible_facts['distribution'] == 'Ubuntu'
+    - name: Allow pipx in global scope
+      shell: pipx ensurepath
+      when:
+        - ansible_facts['distribution'] == 'Debian' or ansible_facts['distribution'] == 'Ubuntu'
+    - name: Install pipx on Amazon
+      shell: python3 -m pip install pipx && python3 -m pipx ensurepath
+      when:
+        - ansible_facts['distribution'] == 'Amazon'
+
+- name: Start Distexp-server in tmux
+  hosts: sls:client
+  connection: ssh
+  become: false
+  gather_facts: false
+  tasks:
+    - name: Install distexp
+      community.general.pipx:
+        name: https://github.com/mjasny/distexprunner/archive/master.zip
+    - name: Check if session exists
+      shell: tmux has-session -t distexp-server
+      register: tmux_session_exists
+      ignore_errors: yes
+    - name: Start distexp in tmux session
+      when: tmux_session_exists is failed
+      shell: tmux new-session -d -s distexp-server '~/.local/bin/distexp-server -vv; bash'
