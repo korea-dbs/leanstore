@@ -44,7 +44,10 @@ auto MersenneTwister::Rand() -> u64 {
   return x;
 }
 
-ZipfGenerator::ZipfGenerator(double theta, int n_elements) : n_elements_(n_elements) {
+ZipfGenerator::ZipfGenerator(double theta, u64 n_elements) 
+  : n_elements_(n_elements),
+    rji_sampler_(n_elements, theta) {
+  /*
   norm_c_ = 0;
   for (auto i = 1; i <= n_elements; ++i) { norm_c_ += 1.0 / pow(static_cast<double>(i), theta); }
   norm_c_ = 1.0 / norm_c_;
@@ -53,9 +56,11 @@ ZipfGenerator::ZipfGenerator(double theta, int n_elements) : n_elements_(n_eleme
   for (int i = 1; i <= n_elements; ++i) {
     sum_prob_[i] = sum_prob_[i - 1] + norm_c_ / pow(static_cast<double>(i), theta);
   }
+  */
 }
 
-auto ZipfGenerator::Rand() -> int {
+auto ZipfGenerator::Rand() -> u64 {
+  /*
   double z;
 
   // Pull a uniform random number (0 < z < 1)
@@ -73,9 +78,14 @@ auto ZipfGenerator::Rand() -> int {
     }
   }
   return low;
+  */
+  // Use rejection-inversion sampling
+  return rji_sampler_.sample(mt_generator_);
 }
 
-auto ZipfGenerator::NoElements() -> int { return n_elements_; }
+auto ZipfGenerator::NoElements() -> u64 { 
+  return n_elements_;
+}
 
 auto RandomGenerator::GetRandU64(u64 min, u64 max) -> u64 {
   u64 rand = min + (mt_generator.Rand() % (max - min));
@@ -100,7 +110,7 @@ void RandomGenerator::GetRandString(u8 *dst, u64 size) {
 // NOLINTNEXTLINE
 auto RandBool() -> bool { return RandomGenerator::GetRand<bool>(0, 2); }
 
-auto Rand(Integer n) -> Integer { return RandomGenerator::GetRand(0, n); }
+auto Rand(Integer n) -> Integer { return RandomGenerator::GetRand(Integer{0}, n); }
 
 auto UniformRand(Integer low, Integer high) -> Integer { return Rand(high - low + 1) + low; }
 

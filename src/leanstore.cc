@@ -49,6 +49,7 @@ LeanStore::LeanStore()
   worker_pool.ScheduleSyncJob(0, [&]() { buffer_pool->AllocMetadataPage(); });
   all_buffer_pools.push_back(buffer_pool.get());
 
+
   // Group-commit
   if ((FLAGS_txn_commit_variant != transaction::CommitProtocol::BASELINE_COMMIT) &&
       (FLAGS_txn_commit_variant != transaction::CommitProtocol::WILO_STEAL)) {
@@ -59,6 +60,11 @@ LeanStore::LeanStore()
       log_manager->CommitExecutor(0).StartExecution();
       std::printf("Halt LeanStore's background GroupCommit thread\n");
     });
+  }
+
+  // reserve space for txn_lat_inc_wait
+  for (auto &lat_inc_wait : statistics::txn_lat_inc_wait) {
+    lat_inc_wait.reserve(100e6);
   }
 
   // Page provider threads
@@ -95,13 +101,24 @@ void LeanStore::Shutdown() {
         wcnt++;
       }
       for (auto idx = 1U; idx < wcnt; idx++) {
+        /*
         std::ranges::copy(statistics::txn_latency[idx], std::back_inserter(statistics::txn_latency[0]));
         std::ranges::copy(statistics::rfa_txn_latency[idx], std::back_inserter(statistics::rfa_txn_latency[0]));
-        std::ranges::copy(statistics::txn_lat_inc_wait[idx], std::back_inserter(statistics::txn_lat_inc_wait[0]));
+        //std::ranges::copy(statistics::txn_lat_inc_wait[idx], std::back_inserter(statistics::txn_lat_inc_wait[0]));
         std::ranges::copy(statistics::txn_queue[idx], std::back_inserter(statistics::txn_queue[0]));
         std::ranges::copy(statistics::txn_exec[idx], std::back_inserter(statistics::txn_exec[0]));
         std::ranges::copy(statistics::txn_per_round[idx], std::back_inserter(statistics::txn_per_round[0]));
+        */
+        {
+          std::ofstream myfile("lat_inc_wait_w" + std::to_string(idx) + ".csv");
+          u64 first = std::get<0>(statistics::txn_lat_inc_wait[idx][0]);
+          for (const auto &item : statistics::txn_lat_inc_wait[idx]) {
+            myfile << tsctime::TscDifferenceMs(std::get<0>(item), first) << "," << std::get<1>(item)/1000 << std::endl;
+          }
+          myfile.close();
+        }
       }
+      /*
       LOG_DEBUG("# data points: %lu", statistics::txn_latency[0].size());
       LOG_DEBUG("Start evaluating latency data");
       std::sort(statistics::txn_latency[0].begin(), statistics::txn_latency[0].end());
@@ -130,6 +147,7 @@ void LeanStore::Shutdown() {
       std::merge(statistics::rfa_txn_latency[0].begin(), statistics::rfa_txn_latency[0].end(),
                  statistics::txn_latency[0].begin(), statistics::txn_latency[0].end(), std::back_inserter(summary));
       WriteSequenceToFile(summary, 1000, "latency.txt");
+      */
     }
   }
 }

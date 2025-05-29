@@ -5,6 +5,8 @@
 #include "sync/hybrid_guard.h"
 #include "transaction/transaction.h"
 
+#include <iostream>
+
 using leanstore::transaction::CommitProtocol;
 
 namespace leanstore::recovery {
@@ -78,6 +80,14 @@ void LogBuffer::PersistLog(LogWorker *worker, uint64_t align_size, const std::fu
   auto *ring      = &(worker->local_ring);
   auto submit_cnt = 0U;
   WriteLogBuffer(wal_cursor, align_size, [&](u8 *buffer, u64 size) {
+    // limit Log size hack 
+    auto current_offset = worker->log_manager->w_offset_.load();
+    while (worker->log_manager->w_offset_max - current_offset > 40 * GB) {
+      if(worker->log_manager->w_offset_.compare_exchange_strong(current_offset, worker->log_manager->w_offset_max)) {
+        std::cout << "Log size limit reached, setting from " << current_offset/1e9 << " to " << worker->log_manager->w_offset_max/1e9 << std::endl;
+        break;
+      }
+    }
     auto offset = worker->log_manager->w_offset_.fetch_sub(size, std::memory_order_release);
     auto sqe    = io_uring_get_sqe(ring);
     assert(sqe != nullptr);

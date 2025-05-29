@@ -53,6 +53,7 @@ class LogManager {
   /* I/O for the log */
   int wal_fd_;
   std::atomic<u64> w_offset_;
+  u64 w_offset_max = 0;
 
   /* Centralized log buffer */
   std::unique_ptr<LogBuffer> centralized_buf_;

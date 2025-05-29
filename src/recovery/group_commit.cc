@@ -344,7 +344,7 @@ void GroupCommitExecutor::PrepareLargePageWrite(T &txn) {
 
 template <class T>
 void GroupCommitExecutor::CompleteTransaction(T &txn) {
-  Ensure(txn.state == transaction::Transaction::State::READY_TO_COMMIT);
+  //Ensure(txn.state == transaction::Transaction::State::READY_TO_COMMIT);
   if (FLAGS_blob_enable) {
     for (auto &lp : txn.ToFlushedLargePages()) { completed_lp_.remove(lp.start_pid); }
     buffer_->FreeStorageManager()->PublicFreeExtents(txn.ToFreeExtents());

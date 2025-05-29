@@ -3,6 +3,7 @@
 #include "common/typedefs.h"
 
 #include "share_headers/db_types.h"
+#include "common/RejectionInversionZipf.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -29,13 +30,16 @@ class MersenneTwister {
 
 class ZipfGenerator {
  private:
-  double norm_c_;                 // Normalization constant
-  int n_elements_;                // Number of elements
-  std::vector<double> sum_prob_;  // pre calculate the sum probabilities
+  //double norm_c_;                 // Normalization constant
+  u64 n_elements_;                // Number of elements
+  //std::vector<double> sum_prob_;  // pre calculate the sum probabilities
+  RejectionInversionZipfSampler rji_sampler_;
+  std::random_device rd_;
+  std::mt19937_64 mt_generator_{rd_()};
  public:
-  ZipfGenerator(double theta, int n_elements);
-  auto Rand() -> int;
-  auto NoElements() -> int;
+  ZipfGenerator(double theta, u64 n_elements);
+  auto Rand() -> u64;
+  auto NoElements() -> u64;
 };
 
 class RandomGenerator {

@@ -16,7 +16,7 @@ extern std::atomic<u64> precommited_txn_processed[MAX_NUMBER_OF_WORKER];
 extern std::atomic<u64> precommited_rfa_txn_processed[MAX_NUMBER_OF_WORKER];
 extern std::vector<u64> txn_latency[MAX_NUMBER_OF_WORKER];
 extern std::vector<u64> rfa_txn_latency[MAX_NUMBER_OF_WORKER];
-extern std::vector<u64> txn_lat_inc_wait[MAX_NUMBER_OF_WORKER];
+extern std::vector<std::tuple<u64, u64>> txn_lat_inc_wait[MAX_NUMBER_OF_WORKER];
 extern std::vector<u64> txn_queue[MAX_NUMBER_OF_WORKER];
 extern std::vector<u64> txn_exec[MAX_NUMBER_OF_WORKER];
 extern std::array<i64, SAMPLING_SIZE> worker_idle_ns[MAX_NUMBER_OF_WORKER];

@@ -10,8 +10,8 @@
 #include <cstdio>
 #include <format>
 
-using UInteger                       = uint32_t;
-using Integer                        = int32_t;
+using UInteger                       = uint64_t;
+using Integer                        = int64_t;
 using Timestamp                      = int64_t;
 using UniqueID                       = uint64_t;
 using Numeric                        = double;

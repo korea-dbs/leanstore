@@ -61,7 +61,7 @@ struct YCSBWorkloadNoBlobRep : public YCSBWorkloadInterface {
         zipf_generator(zipf_theta, initial_record_cnt),
         payloads(std::move(payloads)),
         record_count(initial_record_cnt),
-        read_ratio(std::min(required_read_ratio, 100)) {
+        read_ratio(std::min(required_read_ratio, Integer{100})) {
     Ensure((FLAGS_ycsb_payload_size > BLOB_NORMAL_PAYLOAD) || (!use_blob_register));
     if (FLAGS_ycsb_random_payload) {
       Ensure(FLAGS_ycsb_payload_size > BLOB_NORMAL_PAYLOAD);
@@ -140,7 +140,7 @@ struct YCSBWorkload : public YCSBWorkloadInterface {
         zipf_generator(zipf_theta, initial_record_cnt),
         payloads(std::move(payloads)),
         record_count(initial_record_cnt),
-        read_ratio(std::min(required_read_ratio, 100)),
+        read_ratio(std::min(required_read_ratio, Integer{100})),
         enable_blob_rep((FLAGS_ycsb_payload_size > BLOB_NORMAL_PAYLOAD) && (use_blob_register)),
         scheduler(txn_rate_per_worker) {
     if (FLAGS_ycsb_random_payload) {
@@ -148,6 +148,7 @@ struct YCSBWorkload : public YCSBWorkloadInterface {
     } else {
       FLAGS_ycsb_max_payload_size = FLAGS_ycsb_payload_size;
     }
+    std::cout << "zipf_theta: " << zipf_theta << std::endl;
     assert((0 <= zipf_theta) && (zipf_theta <= 1));
     assert(read_ratio <= 100);
   }

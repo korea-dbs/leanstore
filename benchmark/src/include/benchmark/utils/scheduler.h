@@ -17,9 +17,9 @@ class PoissonScheduler {
 
  private:
   static thread_local uint64_t prev_tsc;
+  static thread_local uint64_t start_tsc;
   static thread_local std::mt19937 generator;
   uint64_t rate_;
-  std::exponential_distribution<> dist_;
 };
 
 }  // namespace benchmark

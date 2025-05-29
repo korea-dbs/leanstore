@@ -155,6 +155,7 @@ void TransactionManager::DurableCommit(T &txn, timestamp_t queue_phase_start) {
   if (FLAGS_txn_debug) {
     auto commit_stats = tsctime::ReadTSC();
     if (start_profiling_latency) {
+      /*
       statistics::txn_queue[worker_thread_id].emplace_back(
         tsctime::TscDifferenceNs(txn.stats.precommit, queue_phase_start));
       if (txn.needs_remote_flush) {
@@ -164,8 +165,13 @@ void TransactionManager::DurableCommit(T &txn, timestamp_t queue_phase_start) {
           tsctime::TscDifferenceNs(txn.stats.start, commit_stats));
       }
       statistics::txn_exec[worker_thread_id].push_back(tsctime::TscDifferenceNs(txn.stats.start, txn.stats.precommit));
-      statistics::txn_lat_inc_wait[worker_thread_id].emplace_back(
-        tsctime::TscDifferenceNs(txn.stats.arrival_time, commit_stats));
+      */
+      // only add latency based on 1% chance
+      if (Rand(100) == 0) {
+        statistics::txn_lat_inc_wait[worker_thread_id].emplace_back(
+              txn.stats.arrival_time,
+              tsctime::TscDifferenceNs(txn.stats.arrival_time, commit_stats));
+      }       
     }
   }
 }

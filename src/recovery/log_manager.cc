@@ -25,7 +25,9 @@ LogManager::LogManager(std::atomic<bool> &is_running)
   /* Initialize log I/O*/
   wal_fd_ = open(FLAGS_db_path.c_str(), O_WRONLY | O_DIRECT, S_IRWXU);
   Ensure(wal_fd_ > 0);
-  w_offset_ = StorageCapacity(FLAGS_db_path.c_str());
+  auto cap = StorageCapacity(FLAGS_db_path.c_str());
+  w_offset_ =  cap;
+  w_offset_max = cap;
 
   /* Initialize local log workers */
   logger_ = static_cast<LogWorker *>(calloc(FLAGS_worker_count, sizeof(LogWorker)));
@@ -76,5 +78,4 @@ void LogManager::TriggerGroupCommit(u32 commit_idx) {
     gc_[commit_idx].ExecuteOneRound();
   }
 }
-
 }  // namespace leanstore::recovery
