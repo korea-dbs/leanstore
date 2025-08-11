@@ -68,6 +68,10 @@ void ConfigsTable::open()
    columns.emplace("c_graveyard", [&](Column& col) { col << FLAGS_graveyard; });
    columns.emplace("c_history_tree_inserts", [&](Column& col) { col << FLAGS_history_tree_inserts; });
    // -------------------------------------------------------------------------------------
+   // (jhpark): add FDP specific configuration
+   columns.emplace("c_fdp_ruh_id", [&](Column& col) { col << FLAGS_fdp_ruh_id;});
+   // -------------------------------------------------------------------------------------
+
    for (auto& c : columns) {
       c.second.generator(c.second);
    }

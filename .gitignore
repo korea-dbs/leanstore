@@ -18,3 +18,5 @@ release*
 clang*
 paper*
 bld/
+*.cscope
+cscope.*

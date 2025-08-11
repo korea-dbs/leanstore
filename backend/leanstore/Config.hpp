@@ -115,3 +115,6 @@ DECLARE_bool(persist);
 DECLARE_bool(recover);
 DECLARE_string(persist_file);
 DECLARE_string(recover_file);
+// -------------------------------------------------------------------------------------
+// (jhpark): add FDP specific configuration
+DECLARE_int64(fdp_ruh_id);

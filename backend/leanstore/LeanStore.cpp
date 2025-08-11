@@ -78,6 +78,8 @@ LeanStore::LeanStore()
       fsync(ssd_fd);
    }
    ensure(fcntl(ssd_fd, F_GETFL) != -1);
+   // (jhpak): fdp
+   std::cout << "[INFO] FDP enabled! RUH id: " << FLAGS_fdp_ruh_id << std::endl;
    // -------------------------------------------------------------------------------------
    buffer_manager = make_unique<storage::BufferManager>(ssd_fd);
    BMC::global_bf = buffer_manager.get();

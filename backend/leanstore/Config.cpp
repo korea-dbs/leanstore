@@ -121,3 +121,6 @@ DEFINE_bool(persist, false, "");
 DEFINE_bool(recover, false, "");
 DEFINE_string(persist_file, "./leanstore.json", "Where should the persist config be saved to?");
 DEFINE_string(recover_file, "./leanstore.json", "Where should the recover config be loaded from?");
+// -------------------------------------------------------------------------------------
+// (jhpark): add FDP specific configuration
+DEFINE_int64(fdp_ruh_id, 0, "");
